@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>NoScience — WBSSC Group C & D</title>
+    <style>
+        /* CSS Styles - Website ka design */
+        :root{
+            --card-bg: #1a1a1a;
+            --accent: #00c3ff;
+            --danger: #ff5252;
+            --muted: #a0a0a0;
+            --max-width: 1100px;
+            --bg-dark: #0a0a0a;
+            --text-light: #f0f0f0;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-light);
+            margin: 0;
+            padding: 0;
+        }
+        
+        .container {
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            border: 1px solid #333;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: black;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            border: 1px solid #333;
+            background: #2a2a2a;
+            color: white;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        
+        th, td {
+            border: 1px solid #444;
+            padding: 8px;
+            text-align: left;
+        }
+        
+        th {
+            background: #333;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        // ============================================================================
+        // STEP 1: API SERVICE - Backend se baat karne ke liye
+        // ============================================================================
+        class ApiService {
+            constructor() {
+                // 🔴 IMPORTANT: Yahan apna ACTUAL Heroku URL dalo
+                this.baseURL = 'https://noscience1.onrender.com';
+                this.isOnline = true;
+            }
+
+            // Generic request method
+            async request(endpoint, options = {}) {
+                const url = `${this.baseURL}${endpoint}`;
+                
+                try {
+                    console.log(`📡 Backend ko call kar rahe hain: ${url}`);
+                    const response = await fetch(url, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        ...options,
+                    });
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const data = await response.json();
+                    console.log('✅ Backend se response aaya:', data);
+                    return data;
+                    
+                } catch (error) {
+                    console.log('❌ Backend unavailable, local storage use kar rahe hain');
+                    this.isOnline = false;
+                    throw error;
+                }
+            }
+
+            // Student register karne ke liye
+            async registerStudent(studentData) {
+                try {
+                    return await this.request('/register', {
+                        method: 'POST',
+                        body: JSON.stringify(studentData),
+                    });
+                } catch (error) {
+                    // Agar backend nahi chal raha toh local storage use karo
+                    this.saveToLocal('registrations', studentData);
+                    return { success: true, fallback: true };
+                }
+            }
+
+            // Test result submit karne ke liye
+            async submitResult(resultData) {
+                try {
+                    return await this.request('/results', {
+                        method: 'POST',
+                        body: JSON.stringify(resultData),
+                    });
+                } catch (error) {
+                    this.saveToLocal('results', resultData);
+                    return { success: true, fallback: true };
+                }
+            }
+
+            // Sab results get karne ke liye (admin ke liye)
+            async getResults() {
+                try {
+                    return await this.request('/results');
+                } catch (error) {
+                    return JSON.parse(localStorage.getItem('noscience_results') || '[]');
+                }
+            }
+
+            // Mock tests get karne ke liye
+            async getMockTests() {
+                try {
+                    return await this.request('/mock-tests');
+                } catch (error) {
+                    return JSON.parse(localStorage.getItem('noscience_mock_tests') || '[]');
+                }
+            }
+
+            // Health check karne ke liye
+            async healthCheck() {
+                try {
+                    return await this.request('/health');
+                } catch (error) {
+                    return { status: 'OFFLINE', message: 'Backend unavailable' };
+                }
+            }
+
+            // Local storage mein save karne ke liye (backup)
+            saveToLocal(key, data) {
+                const storageKey = `noscience_${key}`;
+                const existing = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                data.localId = Date.now();
+                existing.push(data);
+                localStorage.setItem(storageKey, JSON.stringify(existing));
+                console.log('💾 Local storage mein save kiya:', key);
+            }
+        }
+
+        // ============================================================================
+        // STEP 2: API SERVICE START KAREIN
+        // ============================================================================
+        const apiService = new ApiService();
+
+        // ============================================================================
+        // STEP 3: APPLICATION STATE - Current page track karne ke liye
+        // ============================================================================
+        const state = {
+            view: 'landing', // landing, student, test, result, admin
+            student: null,
+            currentQuestionIndex: 0,
+            answers: {},
+            timeLeft: 45 * 60, // 45 minutes
+            currentTest: null
+        };
+
+        // ============================================================================
+        // STEP 4: TRACKING FUNCTIONS - Backend ko data bhejne ke liye
+        // ============================================================================
+        
+        // Student registration track karein
+        async function trackRegistration(student, testType, testName) {
+            const registrationData = {
+                name: student.name,
+                mobile: student.mobile,
+                district: student.district,
+                testType: testType,
+                testName: testName,
+                timestamp: new Date().toISOString()
+            };
+
+            const result = await apiService.registerStudent(registrationData);
+            
+            if (result.success) {
+                console.log('✅ Registration tracked:', result.fallback ? 'LOCALLY' : 'SERVER');
+            }
+        }
+
+        // Test completion track karein
+        async function trackTestCompletion(student, testType, testName, score, total, perSection) {
+            const resultData = {
+                name: student.name,
+                mobile: student.mobile,
+                district: student.district,
+                score: score,
+                total: total,
+                percentage: ((score / total) * 100).toFixed(2),
+                passed: ((score / total) * 100) >= 60,
+                perSection: perSection,
+                testType: testType,
+                testName: testName,
+                timestamp: new Date().toISOString()
+            };
+
+            const result = await apiService.submitResult(resultData);
+            
+            if (result.success) {
+                console.log('✅ Test result tracked:', result.fallback ? 'LOCALLY' : 'SERVER');
+            }
+        }
+
+        // ============================================================================
+        // STEP 5: RENDER FUNCTIONS - Different pages show karne ke liye
+        // ============================================================================
+        
+        function render() {
+            const root = document.getElementById('root');
+            root.innerHTML = '';
+
+            switch(state.view) {
+                case 'landing':
+                    renderLanding(root);
+                    break;
+                case 'student':
+                    renderStudentForm(root);
+                    break;
+                case 'test':
+                    renderTest(root);
+                    break;
+                case 'result':
+                    renderResult(root);
+                    break;
+                case 'admin':
+                    renderAdmin(root);
+                    break;
+            }
+        }
+
+        // Landing Page - Home page
+        function renderLanding(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="card">
+                        <h1>🎯 NoScience - WBSSC Group C & D</h1>
+                        <p>West Bengal Staff Selection Commission examinations ki preparation karein</p>
+                        
+                        <div style="margin: 20px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
+                            <h3>Connection Status</h3>
+                            <div id="connectionStatus">Checking backend connection...</div>
+                        </div>
+                        
+                        <button class="btn btn-primary" onclick="startTest()">Start Test</button>
+                        <button class="btn btn-success" onclick="showAdmin()">Admin Panel</button>
+                    </div>
+                </div>
+            `;
+
+            // Backend connection check karein
+            checkBackendConnection();
+        }
+
+        // Student Registration Form
+        function renderStudentForm(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="card">
+                        <h2>Student Registration</h2>
+                        
+                        <input type="text" id="studentName" placeholder="Full Name" />
+                        <input type="text" id="studentMobile" placeholder="Mobile Number" />
+                        <select id="studentDistrict">
+                            <option value="">Select District</option>
+                            <option>Kolkata</option>
+                            <option>Howrah</option>
+                            <option>North 24 Parganas</option>
+                            <option>South 24 Parganas</option>
+                        </select>
+                        
+                        <button class="btn btn-primary" onclick="submitRegistration()">Start Test</button>
+                        <button class="btn" onclick="state.view='landing'; render();">Back</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Test Interface
+        function renderTest(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="card">
+                        <h2>WBSSC Test</h2>
+                        <p>Student: ${state.student.name} | District: ${state.student.district}</p>
+                        
+                        <div class="card">
+                            <h3>Question 1</h3>
+                            <p>What is the capital of West Bengal?</p>
+                            
+                            <label><input type="radio" name="q1" value="Kolkata"> Kolkata</label><br>
+                            <label><input type="radio" name="q1" value="Delhi"> Delhi</label><br>
+                            <label><input type="radio" name="q1" value="Mumbai"> Mumbai</label><br>
+                            <label><input type="radio" name="q1" value="Chennai"> Chennai</label>
+                        </div>
+                        
+                        <button class="btn btn-success" onclick="submitTest()">Submit Test</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Result Page
+        function renderResult(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="card">
+                        <h2>Test Result</h2>
+                        <p><strong>Name:</strong> ${state.student.name}</p>
+                        <p><strong>Score:</strong> 4/5 (80%)</p>
+                        <p><strong>Status:</strong> PASSED</p>
+                        
+                        <button class="btn btn-primary" onclick="state.view='landing'; render();">Back to Home</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Admin Panel
+        function renderAdmin(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="card">
+                        <h2>Admin Panel</h2>
+                        
+                        <div class="card">
+                            <h3>User Results</h3>
+                            <div id="adminResults">Loading results...</div>
+                        </div>
+                        
+                        <button class="btn" onclick="loadResults()">Refresh Results</button>
+                        <button class="btn" onclick="state.view='landing'; render();">Back to Home</button>
+                    </div>
+                </div>
+            `;
+
+            loadResults();
+        }
+
+        // ============================================================================
+        // STEP 6: EVENT HANDLERS - User ke clicks handle karne ke liye
+        // ============================================================================
+        
+        function startTest() {
+            state.view = 'student';
+            render();
+        }
+
+        function showAdmin() {
+            state.view = 'admin';
+            render();
+        }
+
+        async function submitRegistration() {
+            const name = document.getElementById('studentName').value;
+            const mobile = document.getElementById('studentMobile').value;
+            const district = document.getElementById('studentDistrict').value;
+            
+            if (!name || !mobile || !district) {
+                alert('Please fill all fields');
+                return;
+            }
+            
+            state.student = { name, mobile, district };
+            
+            // Registration backend ko bhejein
+            await trackRegistration(state.student, 'fixed', 'WBSSC Practice Test');
+            
+            state.view = 'test';
+            render();
+        }
+
+        async function submitTest() {
+            // Test complete hone ka data
+            const score = 4;
+            const total = 5;
+            const perSection = { 'General Knowledge': { correct: 4, total: 5 } };
+            
+            // Test result backend ko bhejein
+            await trackTestCompletion(state.student, 'fixed', 'WBSSC Practice Test', score, total, perSection);
+            
+            state.view = 'result';
+            render();
+        }
+
+        // ============================================================================
+        // STEP 7: ADMIN FUNCTIONS - Results dekhne ke liye
+        // ============================================================================
+        
+        async function loadResults() {
+            try {
+                const results = await apiService.getResults();
+                const resultsDiv = document.getElementById('adminResults');
+                
+                if (results.length === 0) {
+                    resultsDiv.innerHTML = '<p>No results found</p>';
+                    return;
+                }
+                
+                let html = '<table>';
+                html += '<tr><th>Name</th><th>Mobile</th><th>Score</th><th>Date</th></tr>';
+                
+                results.forEach(result => {
+                    html += `
+                        <tr>
+                            <td>${result.name}</td>
+                            <td>${result.mobile}</td>
+                            <td>${result.score}/${result.total} (${result.percentage}%)</td>
+                            <td>${new Date(result.timestamp).toLocaleDateString()}</td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</table>';
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                document.getElementById('adminResults').innerHTML = 
+                    '<p>Error loading results: ' + error.message + '</p>';
+            }
+        }
+
+        // ============================================================================
+        // STEP 8: UTILITY FUNCTIONS
+        // ============================================================================
+        
+        async function checkBackendConnection() {
+            const statusDiv = document.getElementById('connectionStatus');
+            if (!statusDiv) return;
+            
+            try {
+                const health = await apiService.healthCheck();
+                if (health.status === 'OK') {
+                    statusDiv.innerHTML = '🟢 BACKEND CONNECTED - Data will sync across devices';
+                    statusDiv.style.color = 'lightgreen';
+                } else {
+                    statusDiv.innerHTML = '🟡 BACKEND OFFLINE - Using local storage only';
+                    statusDiv.style.color = 'yellow';
+                }
+            } catch (error) {
+                statusDiv.innerHTML = '🔴 BACKEND OFFLINE - Using local storage only';
+                statusDiv.style.color = 'red';
+            }
+        }
+
+        // ============================================================================
+        // STEP 9: APPLICATION START KAREIN
+        // ============================================================================
+        
+        // Application start karein
+        window.onload = function() {
+            render();
+            console.log('🚀 NoScience WBSSC Application Started');
+        };
+
+        // Functions globally available karein
+        window.startTest = startTest;
+        window.showAdmin = showAdmin;
+        window.submitRegistration = submitRegistration;
+        window.submitTest = submitTest;
+        window.loadResults = loadResults;
+    </script>
+</body>
+</html>
